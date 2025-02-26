@@ -1,4 +1,4 @@
-# A source code line counter
+ A source code line counter
 
 ## A tool to count the real number of lines in the source code.
 
@@ -76,4 +76,11 @@ $ scount -d /mnt/disk0/nipun/testdir - -c syntax_haskell_js.json
 File-type:    Python  Line-count:     173
 File-type:   Haskell  Line-count:      49
 ```
-
+If we want to speed up execution, we can define the below env variables:
+LCOUNTER_PROCESS - If this variable is defined, then multiple processes are spawned to count the source code lines in parallel. By default, number of process spawned is same as number of CPUs in the machine where we are running the tool.
+LCOUNTER_PROCESS_COUNT - If LCOUNTER_PROCESS is defined, then LCOUNTER_PROCESS_COUNT also can be used to control the number of process spawned for counting the lines, i.e., this overrides the default process count (= number of CPUs in the machine). If this variable is not set, then number of line counting process == number of cpu of the machine.
+These variablescan be defined as shown below:
+```
+export LCOUNTER_PROCESS=yes
+export LCOUNTER_PROCESS_COUNT=4 
+```
