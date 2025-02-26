@@ -177,7 +177,7 @@ def normalize_alias(line, file_type):
     return line
 
 
-def count_REAL_LINES(lines, file_type):
+def count_real_lines(lines, file_type):
     reallines = 0
     is_comm_started = False
     for line in lines:
@@ -214,7 +214,7 @@ def file_processor(filepath, file_type):
     success, lines = get_file_lines(filepath)
     if not success:
         return False, 0, file_type
-    c_lines = count_REAL_LINES(lines, file_type)
+    c_lines = count_real_lines(lines, file_type)
     return True, c_lines, file_type
 
 
