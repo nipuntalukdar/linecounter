@@ -4,8 +4,10 @@ __author__ = "geet"
 import json
 import re
 import sys
+from multiprocessing import Pool, cpu_count
 from optparse import OptionParser
-from os import listdir, path
+from os import getenv, listdir, path
+from threading import Lock
 
 import chardet
 
@@ -61,13 +63,26 @@ extns_norm_map = {
     "lua": "Lua",
     "wlua": "Lua",
 }
-skipdir_re = None
-skiffile_re = None
+SKIPDIR_RE = None
+SKIPFILE_RE = None
+
+PROC_COUNT = 0
+try:
+    if getenv("LCOUNTER_PROCESS", None):
+        PROC_COUNT = int(getenv("LCOUNTER_PROCESS_COUNT", cpu_count()))
+except Exception as e:
+    print(e)
+    exit(1)
+if PROC_COUNT > 256:
+    PROC_COUNT = 256
+POOL = None
+LOCK = None
+REAL_LINES = {}
 
 
 def get_file_type(filepath):
     try:
-        if skiffile_re:
+        if SKIPFILE_RE:
             base = path.basename(filepath)
         extn_index = filepath.rfind(".")
         extn = filepath[extn_index + 1 :]
@@ -144,7 +159,7 @@ def remove_whitespaces(line, file_type):
         comment_keys.append(comment_syntax[file_type]["end"])
     for c_key in comment_keys:
         c_key_escaped = re.escape(c_key)
-        line = re.sub(f"\s*{c_key_escaped}\s*", c_key, line)
+        line = re.sub(rf"\s*{c_key_escaped}\s*", c_key, line)
     return line
 
 
@@ -162,7 +177,7 @@ def normalize_alias(line, file_type):
     return line
 
 
-def count_real_lines(lines, file_type):
+def count_REAL_LINES(lines, file_type):
     reallines = 0
     is_comm_started = False
     for line in lines:
@@ -195,6 +210,50 @@ def try_get_file_lines(filepath):
         return False, []
 
 
+def file_processor(filepath, file_type):
+    success, lines = get_file_lines(filepath)
+    if not success:
+        return False, 0, file_type
+    c_lines = count_REAL_LINES(lines, file_type)
+    return True, c_lines, file_type
+
+
+def update_lines_real(file_type, c_lines):
+    if file_type not in REAL_LINES:
+        REAL_LINES[file_type] = c_lines
+    else:
+        REAL_LINES[file_type] += c_lines
+
+
+def file_processed(args):
+    success, c_lines, file_type = args
+    with LOCK:
+        if success:
+            update_lines_real(file_type, c_lines)
+
+
+def process_file(filepath, file_type):
+    global POOL, LOCK
+    if PROC_COUNT > 1 and not POOL:
+        LOCK = Lock()
+        POOL = Pool(PROC_COUNT)
+    if POOL:
+        POOL.apply_async(
+            file_processor,
+            (
+                filepath,
+                file_type,
+            ),
+            callback=file_processed,
+            error_callback=file_processed,
+        )
+    else:
+        success, c_lines, _ = file_processor(filepath, file_type)
+        if not success:
+            return
+        update_lines_real(file_type, c_lines)
+
+
 def get_file_lines(filepath):
     try:
         with open(filepath, "r") as fp:
@@ -206,9 +265,9 @@ def get_file_lines(filepath):
         return False, []
 
 
-def countlines_in(dirstart, real_lines):
-    if skipdir_re is not None:
-        if skipdir_re.match(dirstart):
+def countlines_in(dirstart):
+    if SKIPDIR_RE is not None:
+        if SKIPDIR_RE.match(dirstart):
             return
     try:
         direntries = listdir(dirstart)
@@ -223,27 +282,17 @@ def countlines_in(dirstart, real_lines):
         file_type = get_file_type(fpath)
         if file_type is None:
             continue
-        if skiffile_re:
+        if SKIPFILE_RE:
             base = path.basename(fpath)
-            if skiffile_re.match(base):
+            if SKIPFILE_RE.match(base):
                 continue
-        try:
-            success, lines = get_file_lines(filepath)
-            if not success:
-                continue
-            c_lines = count_real_lines(lines, file_type)
-            if file_type not in real_lines:
-                real_lines[file_type] = c_lines
-            else:
-                real_lines[file_type] += c_lines
-        except Exception as e:
-            print(filepath, e)
+        process_file(filepath, file_type)
 
     for next_level_dir in next_level_dirs:
-        if skipdir_re is not None:
-            if skipdir_re.match(next_level_dir):
+        if SKIPDIR_RE is not None:
+            if SKIPDIR_RE.match(next_level_dir):
                 continue
-        countlines_in(next_level_dir, real_lines)
+        countlines_in(next_level_dir)
 
 
 def update_comment_syntax(comment_syntax_file):
@@ -348,13 +397,17 @@ def main():
             sys.exit(1)
 
     if options.skip_dir_pattern is not None:
-        skipdir_re = re.compile(options.skip_dir_pattern)
+        global SKIPDIR_RE
+        SKIPDIR_RE = re.compile(options.skip_dir_pattern)
     if options.skip_regular_file is not None:
-        skiffile_re = re.compile(options.skip_regular_file)
+        global SKIPFILE_RE
+        SKIPFILE_RE = re.compile(options.skip_regular_file)
 
-    real_lines = {}
-    countlines_in(options.start_dir, real_lines)
-    for file_type, lines in real_lines.items():
+    countlines_in(options.start_dir)
+    if POOL:
+        POOL.close()
+        POOL.join()
+    for file_type, lines in REAL_LINES.items():
         print(
             "File-type:%10s  Line-count:%8d"
             % (
